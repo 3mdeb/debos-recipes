@@ -1,0 +1,107 @@
+{{- $image := or .image "debian-hb2.img" -}}
+
+architecture: armhf
+
+# Support for the Hummingboard2 DTB was added in the 4.16 Linux. Let's use sid
+# to get the recent kernel version - ATM it is 4.18+98
+actions:
+  - action: debootstrap
+    suite: "sid"
+    components:
+      - main
+    mirror: https://deb.debian.org/debian
+    variant: minbase
+
+  - action: apt
+    description: Install base packages
+    packages: [ sudo, openssh-server, adduser, systemd-sysv ]
+
+  - action: run
+    description: Setup user
+    chroot: true
+    script: setup-user.sh
+
+  - action: run
+    description: Set hostname
+    chroot: true
+    command: echo HummingBoard2 > /etc/hostname
+
+  - action: overlay
+    description: Setup networkd overlay
+    source: networkd
+
+  - action: run
+    description: Setup networking
+    chroot: true
+    script: setup-networking.sh
+
+  - action: apt
+    description: Install Linux and U-Boot packages
+    recommends: false
+    packages:
+      - linux-image-armmp
+      - u-boot-imx
+
+  - action: run
+    description: Create /boot/dtbs directory
+    chroot: true
+    command: mkdir -p /boot/dtbs/
+
+  - action: run
+    description: Copy hummingboard2 devicetrees
+    chroot: true
+    command: cp /usr/lib/linux-image-*-armmp/imx6*hummingboard2*.dtb /boot/dtbs/
+
+  - action: run
+    description: Remove unnecessary devicetrees
+    chroot: true
+    command: rm -rf /usr/lib/linux-image-*-armmp/*
+
+  - action: overlay
+    description: Install U-boot extlinux menu file
+    source: u-boot
+
+  # leave 4MB offset at the image start for U-Boot installation
+  - action: image-partition
+    description: Create partitioned image
+    imagename: {{ $image }}
+    imagesize: 1GB
+    partitiontype: msdos
+    mountpoints:
+      - mountpoint: /
+        partition: root
+    partitions:
+      - name: root
+        fs: ext4
+        start: 4MB
+        end: 100%
+        flags: [ boot ]
+
+  # 'filesystem' origin points to the target root filesystem
+  # 2 sectors = 1K
+  # bs=1K seek=1
+  - action: raw
+    description: Install SPL to the image
+    origin: filesystem
+    source: /usr/lib/u-boot/mx6cuboxi/SPL
+    offset: {{ sector 2 }}
+
+  # bs=1K seek=69
+  - action: raw
+    description: Install U-Boot to the image
+    origin: filesystem
+    source: /usr/lib/u-boot/mx6cuboxi/u-boot.img
+    offset: {{ sector 138 }}
+
+  - action: filesystem-deploy
+    description: Deploy filesystem to the image
+
+  - action: run
+    description: Create bmap file
+    postprocess: true
+    command: bmaptool create {{ $image }} > {{ $image }}.img.bmap
+
+  - action: run
+    description: Compress image
+    postprocess: true
+    command: gzip -f9 {{ $image }}

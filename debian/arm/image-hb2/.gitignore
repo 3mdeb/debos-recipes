@@ -1,0 +1,4 @@
+*.gz
+*.img
+*.bmap
+.wget-hsts
